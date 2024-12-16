@@ -1,0 +1,133 @@
+from netmiko import ConnectHandler
+import difflib
+import os
+
+device_ssh = {
+    'device_type': 'cisco_ios',
+    'host': '192.168.56.101',
+    'username': 'cisco',
+    'password': 'cisco123!',
+}
+
+def configure_interfaces_and_routing(connection):
+    """
+    Configure a loopback interface, a physical interface, and OSPF routing.
+    """
+    print("Configuring interfaces and OSPF routing...")
+    commands = [
+        'interface Loopback0',
+        'ip address 192.168.1.1 255.255.255.255',
+        'no shutdown',
+        
+        'interface GigabitEthernet0/1',
+        'ip address 192.168.56.102 255.255.255.0',
+        'no shutdown',
+        
+        'router ospf 1',
+        'network 192.168.1.1 0.0.0.0 area 0',  
+        'network 192.168.56.0 0.0.0.255 area 0',  
+    ]
+    for command in commands:
+        connection.send_command(command)
+        print(f"Executed: {command}")
+
+def compare_configs(current_config, compare_config):
+    """
+    Compares two configurations and returns the differences in a unified diff format.
+    """
+    diff = difflib.unified_diff(current_config.splitlines(), compare_config.splitlines(), lineterm="")
+    diff_output = '\n'.join(diff)
+    return diff_output
+
+def save_running_config(connection):
+    """
+    Fetch the running configuration and save it to a file.
+    """
+    running_config = connection.send_command('show running-config')
+    with open('running_config_ssh.txt', 'w') as file:
+        file.write(running_config)
+    print("Running configuration saved to running_config_ssh.txt.")
+    return running_config
+
+def compare_with_startup(connection):
+    """
+    Compare the running configuration with the startup configuration.
+    """
+    running_config = connection.send_command('show running-config')
+    startup_config = connection.send_command('show startup-config')
+
+    print("Comparing running config with startup config...")
+    diff = compare_configs(running_config, startup_config)
+    print(f"Configuration Differences (Running vs Startup):\n{diff}")
+
+def compare_with_local_file(running_config):
+    """
+    Compare the running configuration with a local configuration file.
+    """
+    if os.path.exists('stored_config.txt'):
+        with open('stored_config.txt', 'r') as file:
+            local_config = file.read()
+        print("Comparing running config with local stored config...")
+        return compare_configs(running_config, local_config)
+    else:
+        print("Local configuration file not found!")
+        return None
+
+def harden_device(connection):
+    """
+    Apply hardening commands to the Cisco device.
+    """
+    hardening_commands = [
+        'no ip http server', 
+        'no ip http secure-server',  
+        'service password-encryption', 
+        'logging buffered 4096',  
+        'login block-for 60 attempts 5 within 60',  
+    ]
+    print("Applying hardening commands to the device...")
+    for command in hardening_commands:
+        connection.send_command(command)
+        print(f"Command executed: {command}")
+
+def enable_syslog(connection):
+    """
+    Enable syslog for event logging and monitoring.
+    """
+    syslog_server = '192.168.56.200'  
+    connection.send_command(f'logging {syslog_server}')
+    connection.send_command('logging trap informational')  
+    print(f"Syslog enabled, logs will be sent to {syslog_server}.")
+
+try:
+    connection_ssh = ConnectHandler(**device_ssh)
+    print("SSH Connection Established.")
+
+    connection_ssh.send_command('enable')
+
+    connection_ssh.send_command('configure terminal')
+
+    new_hostname = "R2"
+    connection_ssh.send_command(f'hostname {new_hostname}')
+    print(f"Hostname changed to {new_hostname}.")
+
+    configure_interfaces_and_routing(connection_ssh)
+
+    connection_ssh.send_command('end')
+
+    running_config = save_running_config(connection_ssh)
+
+    compare_with_startup(connection_ssh)
+
+    diff_local_config = compare_with_local_file(running_config)
+    if diff_local_config:
+        print(f"Configuration of the Differences with Local File:\n{diff_local_config}")
+
+    harden_device(connection_ssh)
+
+    enable_syslog(connection_ssh)
+
+    connection_ssh.disconnect()
+    print("SSH Connection Closed.")
+
+except Exception as e:
+    print(f" error occurred: {e}")
